@@ -79,6 +79,7 @@
               alert("Failed to read the content of the excel file, currently does not support xls files!");
               return;
             }
+            console.log('Conditional Formats found:', exportJson.sheets[0].luckysheet_conditionformat_save);
             window.luckysheet.destroy();
 
             window.luckysheet.create({
@@ -88,9 +89,7 @@
               title: exportJson.info.name,
               userInfo: exportJson.info.name.creator
             });
-          }, {}, (base64) => {
-            console.log(base64)
-          });
+          }, {});
         });
 
         selectADemo.addEventListener("change", function (evt) {
@@ -108,7 +107,7 @@
               alert("Failed to read the content of the excel file, currently does not support xls files!");
               return;
             }
-            console.log(exportJson, luckysheetfile);
+            console.log('Conditional Formats found:', exportJson.sheets[0].luckysheet_conditionformat_save);
             mask.style.display = "none";
             window.luckysheet.destroy();
 

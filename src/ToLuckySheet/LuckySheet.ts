@@ -5,8 +5,8 @@ import {
 } from "../common/method";
 import { IattributeList } from "../ICommon";
 import {
-  IcellOtherInfo, IformulaList, IformulaListItem, IFormulaSI, IluckyImageBorder, IluckyImageCrop, IluckyImageDefault, IluckySheetCelldataValue, IluckysheetDataVerification, IluckysheetHyperlink, IluckysheetHyperlinkType,
-  IluckySheetSelection
+  IcellOtherInfo, IformulaList, IformulaListItem, IFormulaSI, IluckyImageBorder, IluckyImageCrop, IluckyImageDefault, IluckySheetCelldataValue, IluckysheetCFDefaultFormat, IluckysheetCFIconsFormat,
+  IluckysheetConditionFormat, IluckysheetDataVerification, IluckysheetHyperlink, IluckysheetHyperlinkType, IluckySheetSelection
 } from "./ILuck";
 import { LuckyConfig, LuckySheetBase, LuckysheetCalcChain, LuckySheetConfigMerge } from "./LuckyBase";
 import { LuckySheetCelldata } from "./LuckyCell";
@@ -186,6 +186,9 @@ export class LuckySheet extends LuckySheetBase {
 
     // sheet hide
     this.hide = this.hide;
+
+    // conditional formatting config
+    this.luckysheet_conditionformat_save = this.generateConfigConditionalFormatting();
 
     if (this.mergeCells != null) {
       for (let i = 0; i < this.mergeCells.length; i++) {
@@ -723,6 +726,335 @@ export class LuckySheet extends LuckySheetBase {
     }
 
     return hyperlink;
+  }
+
+  /**
+   * luckysheet config of conditional formatting
+   *
+   * @returns {IluckysheetConditionFormat[]} - conditional formatting config
+   */
+  private generateConfigConditionalFormatting(): IluckysheetConditionFormat[] {
+    let conditionalFormattingElements = this.readXml.getElementsByTagName(
+        "conditionalFormatting",
+        this.sheetFile
+    );
+
+    let conditionFormats: IluckysheetConditionFormat[] = [];
+
+    for (let i = 0; i < conditionalFormattingElements.length; i++) {
+      let cfElement = conditionalFormattingElements[i];
+      let sqref = getXmlAttibute(cfElement.attributeList, "sqref", null);
+
+      if (!sqref) {
+        continue;
+      }
+
+      // Parse cell range - handle multiple ranges separated by space
+      let sqrefArr = sqref.split(" ").filter(s => s && s.length > 0);
+      let cellrange: IluckySheetSelection[] = [];
+
+      for (let k = 0; k < sqrefArr.length; k++) {
+        let range = getcellrange(sqrefArr[k], this.sheetList, this.index);
+        if (range && range.row && range.column) {
+          cellrange.push(range);
+        }
+      }
+
+      if (cellrange.length === 0) {
+        continue;
+      }
+
+      // Get all cfRule elements
+      let cfRules = cfElement.getInnerElements("cfRule");
+
+      if (!cfRules || cfRules.length === 0) {
+        continue;
+      }
+
+      // Process each cfRule
+      for (let j = 0; j < cfRules.length; j++) {
+        let cfRule = cfRules[j];
+        let attrList = cfRule.attributeList;
+        let type = getXmlAttibute(attrList, "type", null);
+
+        if (!type) {
+          continue;
+        }
+
+        let conditionFormat: IluckysheetConditionFormat = {
+          type: this.mapCFType(type),
+          cellrange: cellrange,
+          format: {
+            textColor: null,
+            cellColor: null
+          },
+          conditionName: undefined,
+          conditionRange: [],
+          conditionValue: []
+        };
+
+        let hasFormat = false;
+
+        // Handle different condition types
+        switch (type) {
+          case "cellIs":
+            let operator = getXmlAttibute(attrList, "operator", null);
+            conditionFormat.conditionName = this.mapCFOperator(operator);
+            let formulas = cfRule.getInnerElements("formula");
+            if (formulas && formulas.length > 0) {
+              conditionFormat.conditionValue = formulas.map(f => f.value);
+              conditionFormat.conditionRange = formulas.map(() => {
+                let range: IluckySheetSelection = {
+                  row: [cellrange[0].row[0], cellrange[0].row[0]],
+                  column: [cellrange[0].column[0], cellrange[0].column[0]],
+                  sheetIndex: parseInt(this.index)
+                };
+                return range;
+              });
+            }
+            break;
+
+          case "expression":
+            conditionFormat.conditionName = "expression";
+            let exprFormulas = cfRule.getInnerElements("formula");
+            if (exprFormulas && exprFormulas.length > 0) {
+              conditionFormat.conditionValue = [exprFormulas[0].value];
+            }
+            break;
+
+          case "aboveAverage":
+            conditionFormat.conditionName = "AboveAverage";
+            let aboveAvg = getXmlAttibute(attrList, "aboveAverage", "1");
+            if (aboveAvg === "0") {
+              conditionFormat.conditionValue = ["BelowAverage"];
+            } else {
+              conditionFormat.conditionValue = ["AboveAverage"];
+            }
+            break;
+
+          case "top10":
+            conditionFormat.conditionName = "top10";
+            let val = getXmlAttibute(attrList, "val", "10");
+            let percent = getXmlAttibute(attrList, "percent", "0");
+            let top = getXmlAttibute(attrList, "top", "1");
+            conditionFormat.conditionValue = [parseInt(val), percent === "1" ? "%" : "", top === "1" ? "top" : "bottom"];
+            break;
+
+          case "dataBar":
+            conditionFormat.type = "dataBar";
+            let dataBarElements = cfRule.getInnerElements("dataBar");
+            if (dataBarElements && dataBarElements.length > 0) {
+              let dataBar = dataBarElements[0];
+              let colorElements = dataBar.getInnerElements("color");
+              if (colorElements && colorElements.length > 0) {
+                let color = getColor(colorElements[0], this.styles, "rgb");
+                conditionFormat.format = [color, "#ffffff"];
+              }
+            }
+            break;
+
+          case "colorScale":
+            conditionFormat.type = "colorGradation";
+            let colorScaleElements = cfRule.getInnerElements("colorScale");
+            if (colorScaleElements && colorScaleElements.length > 0) {
+              let colorScale = colorScaleElements[0];
+              let cfvoElements = colorScale.getInnerElements("cfvo");
+              let colorElements = colorScale.getInnerElements("color");
+
+              if (colorElements && colorElements.length > 0) {
+                let colors = colorElements.map(c => getColor(c, this.styles, "rgb"));
+                conditionFormat.format = colors;
+              }
+            }
+            break;
+
+          case "iconSet":
+            conditionFormat.type = "icons";
+            let iconSetElements = cfRule.getInnerElements("iconSet");
+            if (iconSetElements && iconSetElements.length > 0) {
+              let iconSet = iconSetElements[0];
+              let iconSetAttr = iconSet.attributeList;
+              let iconSetVal = getXmlAttibute(iconSetAttr, "iconSet", "3TrafficLights1");
+              let showValue = getXmlAttibute(iconSetAttr, "showValue", "1");
+              let reverse = getXmlAttibute(iconSetAttr, "reverse", "0");
+
+              let formatObj: IluckysheetCFIconsFormat = {
+                len: this.getIconSetCount(iconSetVal),
+                leftMin: reverse === "1" ? "1" : "0",
+                top: showValue === "1" ? "0" : "1"
+              };
+              conditionFormat.format = formatObj;
+            }
+            break;
+
+          case "duplicateValues":
+            conditionFormat.conditionName = "duplicateValues";
+            break;
+
+          case "uniqueValues":
+            conditionFormat.conditionName = "uniqueValues";
+            break;
+
+          case "containsText":
+          case "notContainsText":
+          case "beginsWith":
+          case "endsWith":
+          case "containsBlanks":
+          case "notContainsBlanks":
+          case "containsErrors":
+          case "notContainsErrors":
+            conditionFormat.conditionName = this.mapCFOperator(type);
+            let textFormulas = cfRule.getInnerElements("formula");
+            if (textFormulas && textFormulas.length > 0) {
+              conditionFormat.conditionValue = [textFormulas[0].value];
+            }
+            break;
+        }
+
+        // Parse dxfId for formatting only if not already set by type-specific processing
+        if (!hasFormat) {
+          let dxfId = getXmlAttibute(attrList, "dxfId", null);
+          if (dxfId != null && this.styles["dxfs"] && this.styles["dxfs"].length > 0) {
+            let dxfs = this.styles["dxfs"] as Element[];
+            let dxfIndex = parseInt(dxfId);
+            if (dxfIndex >= 0 && dxfIndex < dxfs.length) {
+              let dxf = dxfs[dxfIndex];
+              if (dxf) {
+                let formatObj = this.parseDXFFormat(dxf);
+                // Only set format if it has actual values
+                if (formatObj.textColor || formatObj.cellColor) {
+                  conditionFormat.format = formatObj;
+                }
+              }
+            }
+          }
+        }
+
+        conditionFormats.push(conditionFormat);
+      }
+    }
+
+    return conditionFormats;
+  }
+
+  /**
+   * Map Excel cfRule type to Luckysheet type
+   */
+  private mapCFType(type: string): string {
+    const typeMap: { [key: string]: string } = {
+      "cellIs": "default",
+      "expression": "default",
+      "aboveAverage": "default",
+      "top10": "default",
+      "dataBar": "dataBar",
+      "colorScale": "colorGradation",
+      "iconSet": "icons",
+      "duplicateValues": "default",
+      "uniqueValues": "default",
+      "containsText": "default",
+      "notContainsText": "default",
+      "beginsWith": "default",
+      "endsWith": "default",
+      "containsBlanks": "default",
+      "notContainsBlanks": "default",
+      "containsErrors": "default",
+      "notContainsErrors": "default"
+    };
+
+    return typeMap[type] || "default";
+  }
+
+  /**
+   * Map Excel operator to Luckysheet condition name
+   */
+  private mapCFOperator(operator: string | null): string | undefined {
+    if (!operator) return undefined;
+
+    const operatorMap: { [key: string]: string } = {
+      "greaterThan": "greaterThan",
+      "lessThan": "lessThan",
+      "between": "betweenness",
+      "notBetween": "notBetween",
+      "equal": "equal",
+      "notEqual": "notEqual",
+      "containsText": "include",
+      "notContains": "notInclude",
+      "beginsWith": "begin",
+      "endsWith": "end",
+      "containsBlanks": "null",
+      "notContainsBlanks": "notNull",
+      "containsErrors": "error",
+      "notContainsErrors": "noError"
+    };
+
+    return operatorMap[operator] || operator;
+  }
+
+  /**
+   * Parse DXF (Differential Formatting) element
+   */
+  private parseDXFFormat(dxf: Element): IluckysheetCFDefaultFormat {
+    let formatObj: IluckysheetCFDefaultFormat = {
+      textColor: null,
+      cellColor: null
+    };
+
+    if (!dxf) {
+      return formatObj;
+    }
+
+    // Parse font color
+    let fontElements = dxf.getInnerElements("font");
+    if (fontElements && fontElements.length > 0) {
+      let font = fontElements[0];
+      let colorElements = font.getInnerElements("color");
+      if (colorElements && colorElements.length > 0) {
+        let color = getColor(colorElements[0], this.styles, "rgb");
+        if (color) {
+          formatObj.textColor = color;
+        }
+      }
+    }
+
+    // Parse fill color
+    let fillElements = dxf.getInnerElements("fill");
+    if (fillElements && fillElements.length > 0) {
+      let fill = fillElements[0];
+      let patternFillElements = fill.getInnerElements("patternFill");
+      if (patternFillElements && patternFillElements.length > 0) {
+        let patternFill = patternFillElements[0];
+        let bgColorElements = patternFill.getInnerElements("bgColor");
+        if (bgColorElements && bgColorElements.length > 0) {
+          let color = getColor(bgColorElements[0], this.styles, "rgb");
+          if (color) {
+            formatObj.cellColor = color;
+          }
+        }
+
+        // Also try fgColor for solid fills
+        if (!formatObj.cellColor) {
+          let fgColorElements = patternFill.getInnerElements("fgColor");
+          if (fgColorElements && fgColorElements.length > 0) {
+            let color = getColor(fgColorElements[0], this.styles, "rgb");
+            if (color) {
+              formatObj.cellColor = color;
+            }
+          }
+        }
+      }
+    }
+
+    return formatObj;
+  }
+
+  /**
+   * Get icon count from iconSet name
+   */
+  private getIconSetCount(iconSet: string): string | number {
+    if (iconSet.includes("3")) return "3";
+    if (iconSet.includes("4")) return "4";
+    if (iconSet.includes("5")) return "5";
+    return "3";
   }
 
   // private getBorderInfo(borders:Element[]):LuckySheetborderInfoCellValueStyle{
